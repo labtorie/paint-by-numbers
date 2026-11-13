@@ -150,6 +150,11 @@
 
   // ---------- SVG ----------
   const lineWidth = (res) => +$('lineW').value * Math.max(res.w, res.h) / 1000;
+  // насыщенность контура: 100 — почти чёрный, 5 — едва заметный серый; номера всегда бледнее линий
+  const gray = (v) => { const h = Math.round(v).toString(16).padStart(2, '0'); return '#' + h + h + h; };
+  const lineLevel = () => 255 - (+$('lineC').value / 100) * 225;
+  const lineColor = () => gray(lineLevel());
+  const numColor = () => gray(Math.min(lineLevel() + (255 - lineLevel()) * 0.4, 246));
   const textOn = (rgb) => (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 140 ? '#000' : '#fff');
 
   function numsMarkup(res) {
@@ -176,9 +181,9 @@
       s += '</g>';
     }
     if (!forExport || mode !== 'color') {
-      s += '<path class="lines" fill="none" stroke="#4a4a4a" stroke-width="' + lw.toFixed(2) + '" stroke-linejoin="round" stroke-linecap="round" d="' + res.lines + '"/>';
+      s += '<path class="lines" fill="none" stroke="' + lineColor() + '" stroke-width="' + lw.toFixed(2) + '" stroke-linejoin="round" stroke-linecap="round" d="' + res.lines + '"/>';
       if (!forExport || $('showNums').checked)
-        s += '<g class="nums" font-family="Helvetica, Arial, sans-serif" fill="#6b6b6b" text-anchor="middle">' + numsMarkup(res) + '</g>';
+        s += '<g class="nums" font-family="Helvetica, Arial, sans-serif" fill="' + numColor() + '" text-anchor="middle">' + numsMarkup(res) + '</g>';
     }
     return s;
   }
@@ -227,6 +232,13 @@
     const lw = lineWidth(state.result);
     svg.querySelector('.lines').setAttribute('stroke-width', lw.toFixed(2));
     svg.querySelector('.fills').setAttribute('stroke-width', (lw * 0.6 + 0.4).toFixed(2));
+  };
+  $('lineC').oninput = () => {
+    $('lineCOut').textContent = $('lineC').value + '%';
+    const svg = stage.firstElementChild;
+    if (!svg || !state.result) return;
+    svg.querySelector('.lines').setAttribute('stroke', lineColor());
+    svg.querySelector('.nums').setAttribute('fill', numColor());
   };
   $('mode').onclick = (e) => { if (e.target.dataset.m) { state.mode = e.target.dataset.m; applyMode(); } };
   $('showNums').onchange = applyMode;
@@ -320,6 +332,7 @@
   // для отладки: ?src=путь&colors=..&detail=..
   const q = new URLSearchParams(location.search);
   for (const id of ['colors', 'detail', 'noise', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); showVal(id); }
+  if (q.get('lineC')) { $('lineC').value = q.get('lineC'); $('lineCOut').textContent = $('lineC').value + '%'; }
   for (const id of ['paper', 'orient']) if (q.get(id)) $(id).value = q.get(id);
   for (const id of ['crop', 'legend']) if (q.get(id)) $(id).checked = q.get(id) === '1';
   if (q.get('mode')) state.mode = q.get('mode');
