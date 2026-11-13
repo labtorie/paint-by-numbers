@@ -88,6 +88,11 @@
     <small>Мелкие области остаются там, где в кадре важные детали</small>
   </div>
   <div class="field">
+    <label for="noise">Шум <output id="noiseOut">выкл</output></label>
+    <input type="range" id="noise" min="0" max="10" value="0">
+    <small>Ложные линии режут крупные области на куски того же цвета — до раскрашивания сюжет не угадать</small>
+  </div>
+  <div class="field">
     <label for="lineW">Толщина линии <output id="lineWOut">1.0</output></label>
     <input type="range" id="lineW" min="0.3" max="3" step="0.1" value="1">
   </div>

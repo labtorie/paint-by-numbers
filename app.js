@@ -97,7 +97,7 @@
 
   function run() {
     if (!state.img) return;
-    const detail = +$('detail').value, colors = +$('colors').value;
+    const detail = +$('detail').value, colors = +$('colors').value, noise = +$('noise').value;
     const long = Math.round(Math.min(720 + (detail - 1) / 9 * 680, Math.max(state.img.width, state.img.height, 320) * 1.5));
     const sc = long / Math.max(state.img.width, state.img.height);
     const w = Math.max(8, Math.round(state.img.width * sc)), h = Math.max(8, Math.round(state.img.height * sc));
@@ -113,7 +113,7 @@
       else if (m.type === 'done') { setProgress(null); state.result = m.res; render(); }
       else { setProgress(null); console.error(m.message); alert('Ошибка обработки: ' + m.message.split('\n')[0]); }
     };
-    worker.postMessage({ id, rgba: data.data, w, h, opts: { colors, detail } }, [data.data.buffer]);
+    worker.postMessage({ id, rgba: data.data, w, h, opts: { colors, detail, noise } }, [data.data.buffer]);
   }
 
   // ---------- SVG ----------
@@ -180,8 +180,9 @@
   }
 
   // ---------- управление ----------
-  for (const id of ['colors', 'detail']) {
-    $(id).oninput = () => { $(id + 'Out').textContent = $(id).value; clearTimeout(state.timer); state.timer = setTimeout(run, 350); };
+  const showVal = (id) => { $(id + 'Out').textContent = id === 'noise' && $(id).value === '0' ? 'выкл' : $(id).value; };
+  for (const id of ['colors', 'detail', 'noise']) {
+    $(id).oninput = () => { showVal(id); clearTimeout(state.timer); state.timer = setTimeout(run, 350); };
   }
   $('lineW').oninput = () => {
     $('lineWOut').textContent = (+$('lineW').value).toFixed(1);
@@ -266,7 +267,7 @@
 
   // для отладки: ?src=путь&colors=..&detail=..
   const q = new URLSearchParams(location.search);
-  for (const id of ['colors', 'detail', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); $(id + 'Out').textContent = $(id).value; }
+  for (const id of ['colors', 'detail', 'noise', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); showVal(id); }
   if (q.get('mode')) state.mode = q.get('mode');
   if (q.get('src')) fetch(q.get('src')).then((r) => r.blob()).then(loadBlob);
   window.__cbn = state;

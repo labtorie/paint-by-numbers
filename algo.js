@@ -412,6 +412,100 @@
       return totalMerged;
     }
 
+    // ---------- шум: ложные линии ----------
+    // Плоскость режется на «органические» ячейки (Вороной в искривлённых координатах).
+    // Ячейки общие для всей картинки, поэтому ложные линии проходят сквозь настоящие контуры.
+    function noiseCells(w, h, size, seed) {
+      let s = seed >>> 0;
+      const rnd = () => {
+        s = (s + 0x6d2b79f5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+      const mk = (cs) => {
+        const gw = Math.ceil(w / cs) + 2, gh = Math.ceil(h / cs) + 2, g = new Float32Array(gw * gh);
+        for (let i = 0; i < g.length; i++) g[i] = rnd() * 2 - 1;
+        return { cs, gw, g };
+      };
+      const sample = (N, x, y) => {
+        const fx = x / N.cs, fy = y / N.cs, x0 = fx | 0, y0 = fy | 0;
+        let tx = fx - x0, ty = fy - y0;
+        tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+        const i = y0 * N.gw + x0, a = N.g[i], b = N.g[i + 1], c = N.g[i + N.gw], d = N.g[i + N.gw + 1];
+        return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+      };
+      const n1 = mk(size * 1.3), n2 = mk(size * 1.3), n3 = mk(size * 0.45), n4 = mk(size * 0.45);
+      const amp = size * 0.6, amp2 = size * 0.15;
+      const gw = Math.ceil(w / size) + 4, gh = Math.ceil(h / size) + 4;
+      const sx = new Float32Array(gw * gh), sy = new Float32Array(gw * gh);
+      for (let gy = 0; gy < gh; gy++)
+        for (let gx = 0; gx < gw; gx++) {
+          sx[gy * gw + gx] = (gx - 2 + 0.12 + 0.76 * rnd()) * size;
+          sy[gy * gw + gx] = (gy - 2 + 0.12 + 0.76 * rnd()) * size;
+        }
+      const cell = new Int32Array(w * h);
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++) {
+          const px = x + amp * sample(n1, x, y) + amp2 * sample(n3, x, y);
+          const py = y + amp * sample(n2, x, y) + amp2 * sample(n4, x, y);
+          const cx = Math.floor(px / size) + 2, cy = Math.floor(py / size) + 2;
+          let best = Infinity, bi = 0;
+          for (let gy = Math.max(0, cy - 1); gy <= Math.min(gh - 1, cy + 1); gy++)
+            for (let gx = Math.max(0, cx - 1); gx <= Math.min(gw - 1, cx + 1); gx++) {
+              const k = gy * gw + gx, d = (sx[k] - px) ** 2 + (sy[k] - py) ** 2;
+              if (d < best) { best = d; bi = k; }
+            }
+          cell[y * w + x] = bi;
+        }
+      return cell;
+    }
+    // слишком мелкие и тонкие обрезки возвращаются к соседнему куску того же цвета
+    function mergePieces(key, w, h, minArea, minThick) {
+      const n = w * h;
+      for (let pass = 0; pass < 16; pass++) {
+        const { rid, count, regLabel, area } = components(key, w, h);
+        const dm = distanceMap(rid, w, h), mx = new Float32Array(count);
+        for (let i = 0; i < n; i++) if (dm[i] > mx[rid[i]]) mx[rid[i]] = dm[i];
+        const cand = [];
+        for (let r = 0; r < count; r++) if (area[r] < minArea || mx[r] < minThick) cand.push(r);
+        if (!cand.length) break;
+        const start = new Int32Array(count + 1);
+        for (let i = 0; i < n; i++) start[rid[i] + 1]++;
+        for (let r = 0; r < count; r++) start[r + 1] += start[r];
+        const pos = start.slice(0, count), order = new Int32Array(n);
+        for (let i = 0; i < n; i++) order[pos[rid[i]]++] = i;
+        cand.sort((p, q) => area[p] - area[q]);
+        const touched = new Uint8Array(count);
+        let merged = 0;
+        for (const r of cand) {
+          if (touched[r]) continue;
+          const own = regLabel[r] & 255, nb = new Map();
+          for (let t = start[r]; t < start[r + 1]; t++) {
+            const p = order[t], x = p % w;
+            for (let k = 0; k < 4; k++) {
+              let q;
+              if (k === 0) { if (x === 0) continue; q = p - 1; }
+              else if (k === 1) { if (x === w - 1) continue; q = p + 1; }
+              else if (k === 2) { if (p < w) continue; q = p - w; }
+              else { if (p >= n - w) continue; q = p + w; }
+              const rq = rid[q];
+              if (rq === r || (key[q] & 255) !== own) continue;
+              const e = nb.get(rq);
+              if (e) e.c++; else nb.set(rq, { c: 1, q });
+            }
+          }
+          let best = null, br = -1;
+          for (const [rq, e] of nb) if (!touched[rq] && (!best || e.c > best.c)) { best = e; br = rq; }
+          if (!best) continue;
+          const nk = key[best.q];
+          for (let t = start[r]; t < start[r + 1]; t++) key[order[t]] = nk;
+          touched[r] = 1; touched[br] = 1; merged++;
+        }
+        if (!merged) break;
+      }
+    }
+
     // ---------- 6. векторизация ----------
     function smoothPolyline(P, cnt, closed, iters) {
       let src = P, dst = new Float64Array(P.length);
@@ -677,8 +771,21 @@
         return { rgb, hex: '#' + rgb.map((v) => v.toString(16).padStart(2, '0')).join(''), share: cnt[k] / n };
       });
 
+      // шум: крупные области режутся на куски того же цвета
+      let key = labels;
+      const noise = clamp(+opts.noise || 0, 0, 10);
+      if (noise > 0) {
+        progress('Ложные линии', 0.79);
+        const size = Math.max(w, h) * lerp(0.17, 0.04, (noise - 1) / 9);
+        const cell = noiseCells(w, h, size, 0x9e3779b9);
+        key = new Int32Array(n);
+        for (let i = 0; i < n; i++) key[i] = cell[i] * 256 + labels[i];
+        mergePieces(key, w, h, Math.max(MP.minArea * 1.3, size * size * 0.12), Math.max(MP.minThick * 1.6, size * 0.11));
+      }
+
       progress('Расстановка номеров', 0.8);
-      const cc = components(labels, w, h);
+      const cc = components(key, w, h);
+      for (let r = 0; r < cc.count; r++) cc.regLabel[r] &= 255;
       const dm = distanceMap(cc.rid, w, h);
       const bestD = new Float32Array(cc.count), bestI = new Int32Array(cc.count);
       for (let i = 0; i < n; i++) { const r = cc.rid[i]; if (dm[i] > bestD[r]) { bestD[r] = dm[i]; bestI[r] = i; } }
