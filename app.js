@@ -19,17 +19,48 @@
   }
 
   // ---------- загрузка ----------
+  // HEIC/HEIF: Safari открывает сам, остальным браузерам подгружаем декодер по требованию
+  const HEIC_LIB = 'https://cdn.jsdelivr.net/npm/heic-to@1.6.6/dist/iife/heic-to.js';
+  let heicLib = null;
+  const isImageFile = (f) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name || '');
+  async function looksLikeHeic(blob) {
+    const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+    const tag = String.fromCharCode(...b.subarray(4, 12));
+    return /^ftyp(heic|heix|heim|heis|hevc|hevx|hevm|hevs|mif1|msf1)/.test(tag);
+  }
+  function loadHeicLib() {
+    if (!heicLib) heicLib = new Promise((res, rej) => {
+      const sc = document.createElement('script');
+      sc.src = HEIC_LIB;
+      sc.onload = () => (window.HeicTo ? res(window.HeicTo) : rej(new Error('no HeicTo')));
+      sc.onerror = () => { heicLib = null; rej(new Error('network')); };
+      document.head.appendChild(sc);
+    });
+    return heicLib;
+  }
+  async function decode(blob) {
+    try { return { img: await createImageBitmap(blob), blob }; } catch (e) { /* не умеет сам */ }
+    if (!(await looksLikeHeic(blob))) throw new Error('format');
+    setProgress('Декодирование HEIC', 0.05);
+    let HeicTo;
+    try { HeicTo = await loadHeicLib(); } catch (e) { throw new Error('heic-lib'); }
+    const jpg = await HeicTo({ blob, type: 'image/jpeg', quality: 0.95 });
+    return { img: await createImageBitmap(jpg), blob: jpg };
+  }
   async function loadBlob(blob) {
     try {
-      const img = await createImageBitmap(blob);
+      const d = await decode(blob);
       if (state.imgUrl) URL.revokeObjectURL(state.imgUrl);
-      state.img = img;
-      state.imgUrl = URL.createObjectURL(blob);
+      state.img = d.img;
+      state.imgUrl = URL.createObjectURL(d.blob);
       state.view = null; state.hl = -1;
       empty.style.display = 'none';
       run();
     } catch (e) {
-      alert('Не удалось открыть изображение. Попробуйте JPG или PNG.');
+      setProgress(null);
+      alert(e.message === 'heic-lib'
+        ? 'Не удалось загрузить декодер HEIC — проверьте подключение к интернету.'
+        : 'Не удалось открыть изображение. Поддерживаются JPG, PNG, WebP, HEIC.');
     }
   }
   $('pick').onclick = empty.onclick = () => fileInput.click();
@@ -38,7 +69,7 @@
   addEventListener('dragleave', () => document.body.classList.remove('drag'));
   addEventListener('drop', (e) => {
     e.preventDefault(); document.body.classList.remove('drag');
-    const f = [...e.dataTransfer.files].find((x) => x.type.startsWith('image/'));
+    const f = [...e.dataTransfer.files].find(isImageFile);
     if (f) loadBlob(f);
   });
   addEventListener('paste', (e) => {
