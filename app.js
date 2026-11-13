@@ -78,30 +78,57 @@
   });
 
   // уменьшение по шагам — без алиасинга на больших фото
-  function rasterize(img, tw, th) {
-    let src = img, sw = img.width, sh = img.height;
-    while (sw / 2 > tw * 1.2) {
+  function rasterize(img, crop, tw, th) {
+    let src = img, r = crop;
+    while (r.w / 2 > tw * 1.2) {
       const c = document.createElement('canvas');
-      c.width = sw = Math.round(sw / 2); c.height = sh = Math.round(sh / 2);
+      c.width = Math.round(r.w / 2); c.height = Math.round(r.h / 2);
       const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
-      g.drawImage(src, 0, 0, sw, sh); src = c;
+      g.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+      src = c; r = { x: 0, y: 0, w: c.width, h: c.height };
     }
     const c = document.createElement('canvas');
     c.width = tw; c.height = th;
     const g = c.getContext('2d', { willReadFrequently: true });
     g.fillStyle = '#fff'; g.fillRect(0, 0, tw, th);
     g.imageSmoothingQuality = 'high';
-    g.drawImage(src, 0, 0, tw, th);
+    g.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, tw, th);
     return g.getImageData(0, 0, tw, th);
+  }
+
+  // ---------- лист ----------
+  const PAPER = { A5: [148, 210], A4: [210, 297], A3: [297, 420], Letter: [215.9, 279.4] };
+  // раскладка в миллиметрах: поля, место под картинку и под палитру из K цветов
+  function pageLayout(K) {
+    let [pw, ph] = PAPER[$('paper').value];
+    const o = $('orient').value;
+    if (o === 'land' || (o === 'auto' && state.img && state.img.width > state.img.height)) [pw, ph] = [ph, pw];
+    const m = 8, cw = pw - 2 * m, sw = 11, sh = 7, gap = 2;
+    let rows = 0, cols = 0, legH = 0;
+    if ($('legend').checked && K > 0) {
+      const maxCols = Math.max(1, Math.floor((cw + gap) / (sw + gap)));
+      rows = Math.ceil(K / maxCols); cols = Math.ceil(K / rows);
+      legH = rows * (sh + gap) - gap + 4;
+    }
+    return { pw, ph, m, cw, ch: ph - 2 * m - legH, legH, rows, cols, sw, sh, gap };
+  }
+  function cropRect() {
+    const iw = state.img.width, ih = state.img.height;
+    if (!$('crop').checked) return { x: 0, y: 0, w: iw, h: ih };
+    const L = pageLayout(+$('colors').value), a = L.cw / L.ch;
+    if (iw / ih > a) { const w = Math.round(ih * a); return { x: Math.round((iw - w) / 2), y: 0, w, h: ih }; }
+    const h = Math.round(iw / a);
+    return { x: 0, y: Math.round((ih - h) / 2), w: iw, h };
   }
 
   function run() {
     if (!state.img) return;
     const detail = +$('detail').value, colors = +$('colors').value, noise = +$('noise').value;
-    const long = Math.round(Math.min(720 + (detail - 1) / 9 * 680, Math.max(state.img.width, state.img.height, 320) * 1.5));
-    const sc = long / Math.max(state.img.width, state.img.height);
-    const w = Math.max(8, Math.round(state.img.width * sc)), h = Math.max(8, Math.round(state.img.height * sc));
-    const data = rasterize(state.img, w, h);
+    const crop = cropRect();
+    const long = Math.round(Math.min(720 + (detail - 1) / 9 * 680, Math.max(crop.w, crop.h, 320) * 1.5));
+    const sc = long / Math.max(crop.w, crop.h);
+    const w = Math.max(8, Math.round(crop.w * sc)), h = Math.max(8, Math.round(crop.h * sc));
+    const data = rasterize(state.img, crop, w, h);
     if (state.worker) state.worker.terminate();
     const worker = (state.worker = new Worker(workerUrl));
     const id = ++state.job;
@@ -110,7 +137,12 @@
       const m = e.data;
       if (m.id !== state.job) return;
       if (m.type === 'progress') setProgress(m.stage, m.p);
-      else if (m.type === 'done') { setProgress(null); state.result = m.res; render(); }
+      else if (m.type === 'done') {
+        setProgress(null);
+        const sameSize = state.result && state.result.w === m.res.w && state.result.h === m.res.h;
+        if (!sameSize) state.view = null;
+        state.result = m.res; state.crop = crop; render();
+      }
       else { setProgress(null); console.error(m.message); alert('Ошибка обработки: ' + m.message.split('\n')[0]); }
     };
     worker.postMessage({ id, rgba: data.data, w, h, opts: { colors, detail, noise } }, [data.data.buffer]);
@@ -133,7 +165,11 @@
   function bodyMarkup(res, mode, forExport) {
     const lw = lineWidth(res);
     let s = '<rect x="0" y="0" width="' + res.w + '" height="' + res.h + '" fill="#fff"/>';
-    if (!forExport) s += '<image class="orig" href="' + state.imgUrl + '" x="0" y="0" width="' + res.w + '" height="' + res.h + '" preserveAspectRatio="none"/>';
+    if (!forExport) {
+      const c = state.crop;
+      s += '<svg class="orig" x="0" y="0" width="' + res.w + '" height="' + res.h + '" viewBox="' + c.x + ' ' + c.y + ' ' + c.w + ' ' + c.h + '" preserveAspectRatio="none">' +
+        '<image href="' + state.imgUrl + '" x="0" y="0" width="' + state.img.width + '" height="' + state.img.height + '"/></svg>';
+    }
     if (!forExport || mode === 'color') {
       s += '<g class="fills" fill-rule="evenodd" stroke-width="' + (lw * 0.6 + 0.4).toFixed(2) + '" stroke-linejoin="round">';
       res.palette.forEach((c, k) => { s += '<path data-k="' + k + '" fill="' + c.hex + '" stroke="' + c.hex + '" d="' + res.fills[k] + '"/>'; });
@@ -223,21 +259,30 @@
   stage.addEventListener('dblclick', () => { if (state.result) { state.view = null; const res = state.result, pad = Math.max(res.w, res.h) * 0.02; state.view = { x: -pad, y: -pad, w: res.w + 2 * pad, h: res.h + 2 * pad }; applyView(); } });
 
   // ---------- экспорт ----------
+  const f2 = (v) => (Math.round(v * 100) / 100).toString();
+  // страница выбранного формата: картинка вписана в поля, палитра (если включена) под ней
   function exportSvg() {
     const res = state.result, mode = state.mode === 'color' ? 'color' : 'outline';
-    const u = res.w / 100, pad = 2 * u;
-    const K = res.palette.length, cols = Math.min(K, 12), cell = res.w / cols, sw = Math.min(cell * 0.8, 6.5 * u), rowH = sw * 0.62 + 1.2 * u;
-    const rows = Math.ceil(K / cols), legH = rows * rowH + 2 * u;
-    const W = res.w + 2 * pad, H = res.h + legH + 2 * pad;
-    let leg = '<g font-family="Helvetica, Arial, sans-serif" font-weight="bold" text-anchor="middle" font-size="' + (sw * 0.3).toFixed(1) + '">';
-    res.palette.forEach((c, k) => {
-      const x = (k % cols) * cell + (cell - sw) / 2, y = res.h + 2 * u + Math.floor(k / cols) * rowH, hgt = sw * 0.62;
-      leg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + sw.toFixed(1) + '" height="' + hgt.toFixed(1) + '" rx="' + (u * 0.6).toFixed(1) + '" fill="' + c.hex + '" stroke="#4a4a4a" stroke-width="' + (u * 0.1).toFixed(2) + '"/>' +
-        '<text x="' + (x + sw / 2).toFixed(1) + '" y="' + (y + hgt / 2).toFixed(1) + '" dy=".35em" fill="' + textOn(c.rgb) + '">' + (k + 1) + '</text>';
-    });
-    leg += '</g>';
-    return { W, H, svg: '<svg xmlns="http://www.w3.org/2000/svg" width="' + W.toFixed(0) + '" height="' + H.toFixed(0) + '" viewBox="' + (-pad) + ' ' + (-pad) + ' ' + W + ' ' + H + '">' +
-      '<rect x="' + (-pad) + '" y="' + (-pad) + '" width="' + W + '" height="' + H + '" fill="#fff"/>' + bodyMarkup(res, mode, true) + leg + '</svg>' };
+    const K = res.palette.length, L = pageLayout(K);
+    const sc = Math.min(L.cw / res.w, L.ch / res.h), iw = res.w * sc, ih = res.h * sc;
+    const ix = L.m + (L.cw - iw) / 2, iy = L.m + (L.ch - ih) / 2;
+    const pad = lineWidth(res) / 2 + 0.5;
+    let leg = '';
+    if (L.legH) {
+      leg = '<g font-family="Helvetica, Arial, sans-serif" font-weight="bold" text-anchor="middle" font-size="3.6">';
+      res.palette.forEach((c, k) => {
+        const row = Math.floor(k / L.cols), inRow = Math.min(L.cols, K - row * L.cols);
+        const x = L.m + (L.cw - (inRow * (L.sw + L.gap) - L.gap)) / 2 + (k % L.cols) * (L.sw + L.gap);
+        const y = iy + ih + 4 + row * (L.sh + L.gap);
+        leg += '<rect x="' + f2(x) + '" y="' + f2(y) + '" width="' + L.sw + '" height="' + L.sh + '" rx="1.2" fill="' + c.hex + '" stroke="#4a4a4a" stroke-width="0.2"/>' +
+          '<text x="' + f2(x + L.sw / 2) + '" y="' + f2(y + L.sh / 2) + '" dy=".35em" fill="' + textOn(c.rgb) + '">' + (k + 1) + '</text>';
+      });
+      leg += '</g>';
+    }
+    return { W: L.pw, H: L.ph, svg: '<svg xmlns="http://www.w3.org/2000/svg" width="' + L.pw + 'mm" height="' + L.ph + 'mm" viewBox="0 0 ' + L.pw + ' ' + L.ph + '">' +
+      '<rect x="0" y="0" width="' + L.pw + '" height="' + L.ph + '" fill="#fff"/>' +
+      '<svg x="' + f2(ix) + '" y="' + f2(iy) + '" width="' + f2(iw) + '" height="' + f2(ih) + '" viewBox="' + f2(-pad) + ' ' + f2(-pad) + ' ' + f2(res.w + 2 * pad) + ' ' + f2(res.h + 2 * pad) + '">' +
+      bodyMarkup(res, mode, true) + '</svg>' + leg + '</svg>' };
   }
   function download(blob, name) {
     const a = document.createElement('a');
@@ -250,7 +295,7 @@
     const ex = exportSvg(), url = URL.createObjectURL(new Blob([ex.svg], { type: 'image/svg+xml' }));
     const img = new Image();
     img.onload = () => {
-      const k = 3508 / Math.max(ex.W, ex.H), c = document.createElement('canvas');
+      const k = Math.min(300 / 25.4, 5000 / Math.max(ex.W, ex.H)), c = document.createElement('canvas');
       c.width = Math.round(ex.W * k); c.height = Math.round(ex.H * k);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(url);
@@ -260,14 +305,23 @@
   };
   $('print').onclick = () => {
     const ex = exportSvg();
-    $('print-root').innerHTML = '<style>@page{size:A4 ' + (ex.W > ex.H ? 'landscape' : 'portrait') + ';margin:8mm}</style>' +
-      ex.svg.replace(/ width="\d+" height="\d+"/, '');
+    // страница без полей браузера: поля уже заложены в раскладку; -1 мм, чтобы не появлялся пустой второй лист
+    $('print-root').innerHTML = '<style>@page{size:' + ex.W + 'mm ' + ex.H + 'mm;margin:0}' +
+      '@media print{#print-root>svg{max-width:' + ex.W + 'mm;max-height:' + (ex.H - 1) + 'mm}}</style>' + ex.svg;
     setTimeout(() => window.print(), 50);
   };
+  for (const id of ['paper', 'orient', 'crop', 'legend']) {
+    $(id).onchange = () => {
+      $('orient').disabled = false;
+      if ($('crop').checked || id === 'crop') run();
+    };
+  }
 
   // для отладки: ?src=путь&colors=..&detail=..
   const q = new URLSearchParams(location.search);
   for (const id of ['colors', 'detail', 'noise', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); showVal(id); }
+  for (const id of ['paper', 'orient']) if (q.get(id)) $(id).value = q.get(id);
+  for (const id of ['crop', 'legend']) if (q.get(id)) $(id).checked = q.get(id) === '1';
   if (q.get('mode')) state.mode = q.get('mode');
   if (q.get('src')) fetch(q.get('src')).then((r) => r.blob()).then(loadBlob);
   window.__cbn = state;

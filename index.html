@@ -32,7 +32,8 @@
   .seg button + button { border-left: 1px solid var(--line); }
   .seg button.on { background: var(--ink); color: var(--panel); }
   .row { display: flex; gap: 8px; }
-  .row .btn { flex: 1; }
+  .row .btn { flex: 1; min-width: 0; }
+  select.btn { background: var(--panel); }
   .check { display: flex; align-items: center; gap: 8px; }
   #palette { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; }
   #palette button { aspect-ratio: 1; border-radius: 8px; border: 1px solid rgba(0,0,0,.25); font: 600 12px/1 inherit; cursor: pointer; padding: 0; }
@@ -41,8 +42,8 @@
   .sep { border-top: 1px solid var(--line); margin: 0 -18px; }
   main { flex: 1; min-width: 0; position: relative; background: var(--stage); }
   #stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
-  #stage svg { width: 100%; height: 100%; display: block; cursor: grab; }
-  #stage svg:active { cursor: grabbing; }
+  #stage > svg { width: 100%; height: 100%; display: block; cursor: grab; }
+  #stage > svg:active { cursor: grabbing; }
   #empty { position: absolute; inset: 24px; border: 2px dashed var(--line); border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; cursor: pointer; }
   #empty b { color: var(--ink); font-size: 18px; }
   body.drag #empty, body.drag #stage { outline: 3px solid var(--accent); outline-offset: -6px; }
@@ -56,14 +57,14 @@
   svg.m-outline .fills path.hl { fill-opacity: .85; }
   svg.m-color .lines, svg.m-color .nums { display: none; }
   svg.m-orig .fills, svg.m-orig .lines, svg.m-orig .nums { display: none; }
-  svg:not(.m-orig) .orig { display: none; }
+  #stage > svg:not(.m-orig) .orig { display: none; }
   svg.nonums .nums { display: none; }
   #print-root { display: none; }
   @media print {
     body > *:not(#print-root) { display: none !important; }
-    body { background: #fff; display: block; }
+    html, body { background: #fff; display: block; height: auto; margin: 0; padding: 0; }
     #print-root { display: block; }
-    #print-root svg { width: 100%; height: auto; max-height: 100vh; }
+    #print-root > svg { display: block; width: 100%; height: auto; margin: 0 auto; break-inside: avoid; }
   }
   @media (max-width: 760px) {
     body { flex-direction: column; }
@@ -112,6 +113,24 @@
   <div id="stats"></div>
 
   <div class="sep"></div>
+  <div class="field">
+    <label>Лист</label>
+    <div class="row">
+      <select id="paper" class="btn">
+        <option value="A5">A5</option>
+        <option value="A4" selected>A4</option>
+        <option value="A3">A3</option>
+        <option value="Letter">Letter</option>
+      </select>
+      <select id="orient" class="btn">
+        <option value="auto" selected>Авто</option>
+        <option value="port">Книжная</option>
+        <option value="land">Альбомная</option>
+      </select>
+    </div>
+  </div>
+  <label class="check"><input type="checkbox" id="crop"> Обрезать фото под лист</label>
+  <label class="check"><input type="checkbox" id="legend" checked> Палитра на листе</label>
   <div class="row">
     <button class="btn" id="dlSvg" disabled>SVG</button>
     <button class="btn" id="dlPng" disabled>PNG</button>
