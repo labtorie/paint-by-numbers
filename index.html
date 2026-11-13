@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Раскраска по номерам</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fbf9f4; --ink: #23201b; --muted: #7a7366; --line: #ded8ca;
+    --accent: #c2552d; --accent-ink: #fff; --stage: #e9e4d8; --paper: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1a18; --panel: #232220; --ink: #ece8df; --muted: #9a9385; --line: #3a3833; --accent: #e0703f; --stage: #151413; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); display: flex; }
+  aside { width: 310px; flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; overflow-y: auto; padding: 18px; gap: 16px; }
+  aside > * { flex: none; }
+  h1 { font-size: 17px; margin: 0; letter-spacing: -.01em; }
+  h1 small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .btn { appearance: none; border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer; }
+  .btn:hover { border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .field label { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
+  .field label output { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .field small { color: var(--muted); font-size: 12px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { flex: 1; border: 0; background: transparent; color: var(--ink); padding: 7px 4px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--ink); color: var(--panel); }
+  .row { display: flex; gap: 8px; }
+  .row .btn { flex: 1; }
+  .check { display: flex; align-items: center; gap: 8px; }
+  #palette { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 6px; }
+  #palette button { aspect-ratio: 1; border-radius: 8px; border: 1px solid rgba(0,0,0,.25); font: 600 12px/1 inherit; cursor: pointer; padding: 0; }
+  #palette button.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #stats { color: var(--muted); font-size: 12px; min-height: 1.4em; }
+  .sep { border-top: 1px solid var(--line); margin: 0 -18px; }
+  main { flex: 1; min-width: 0; position: relative; background: var(--stage); }
+  #stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
+  #stage svg { width: 100%; height: 100%; display: block; cursor: grab; }
+  #stage svg:active { cursor: grabbing; }
+  #empty { position: absolute; inset: 24px; border: 2px dashed var(--line); border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; cursor: pointer; }
+  #empty b { color: var(--ink); font-size: 18px; }
+  body.drag #empty, body.drag #stage { outline: 3px solid var(--accent); outline-offset: -6px; }
+  #progress { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; width: min(360px, 80%); box-shadow: 0 6px 24px rgba(0,0,0,.15); display: none; }
+  #progress.on { display: block; }
+  #progress .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  #progress .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  #hint { position: absolute; right: 14px; bottom: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  /* режимы просмотра */
+  svg.m-outline .fills path { fill-opacity: 0; stroke: none; }
+  svg.m-outline .fills path.hl { fill-opacity: .85; }
+  svg.m-color .lines, svg.m-color .nums { display: none; }
+  svg.m-orig .fills, svg.m-orig .lines, svg.m-orig .nums { display: none; }
+  svg:not(.m-orig) .orig { display: none; }
+  svg.nonums .nums { display: none; }
+  #print-root { display: none; }
+  @media print {
+    body > *:not(#print-root) { display: none !important; }
+    body { background: #fff; display: block; }
+    #print-root { display: block; }
+    #print-root svg { width: 100%; height: auto; max-height: 100vh; }
+  }
+  @media (max-width: 760px) {
+    body { flex-direction: column; }
+    aside { width: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 48vh; }
+    main { min-height: 52vh; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Раскраска по номерам<small>Фото → контуры с номерами цветов</small></h1>
+  <button class="btn primary" id="pick">Загрузить фото</button>
+  <input type="file" id="file" accept="image/*" hidden>
+
+  <div class="field">
+    <label for="colors">Количество цветов <output id="colorsOut">16</output></label>
+    <input type="range" id="colors" min="4" max="40" value="16">
+  </div>
+  <div class="field">
+    <label for="detail">Детализация <output id="detailOut">6</output></label>
+    <input type="range" id="detail" min="1" max="10" value="6">
+    <small>Мелкие области остаются там, где в кадре важные детали</small>
+  </div>
+  <div class="field">
+    <label for="lineW">Толщина линии <output id="lineWOut">1.0</output></label>
+    <input type="range" id="lineW" min="0.3" max="3" step="0.1" value="1">
+  </div>
+
+  <div class="sep"></div>
+  <div class="seg" id="mode">
+    <button data-m="outline" class="on">Контур</button>
+    <button data-m="color">В цвете</button>
+    <button data-m="orig">Оригинал</button>
+  </div>
+  <label class="check"><input type="checkbox" id="showNums" checked> Показывать номера</label>
+
+  <div>
+    <div class="field"><label>Палитра</label><small>Нажмите цвет, чтобы подсветить его области</small></div>
+    <div id="palette"></div>
+  </div>
+  <div id="stats"></div>
+
+  <div class="sep"></div>
+  <div class="row">
+    <button class="btn" id="dlSvg" disabled>SVG</button>
+    <button class="btn" id="dlPng" disabled>PNG</button>
+    <button class="btn" id="print" disabled>Печать / PDF</button>
+  </div>
+</aside>
+<main>
+  <div id="stage"></div>
+  <div id="empty"><b>Перетащите фото сюда</b><span>или нажмите, чтобы выбрать файл. Можно вставить из буфера (Ctrl/⌘+V).<br>Фото обрабатывается на вашем устройстве и никуда не отправляется.</span></div>
+  <div id="hint" hidden>колесо — масштаб · перетаскивание — сдвиг · двойной клик — сброс</div>
+  <div id="progress"><span id="progText">…</span><div class="bar"><i id="progBar"></i></div></div>
+</main>
+<div id="print-root"></div>
+<script src="algo.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
