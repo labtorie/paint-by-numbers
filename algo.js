@@ -385,12 +385,25 @@
             const d = Math.sqrt((pal.l[own] - pal.l[lab]) ** 2 + (pal.a[own] - pal.a[lab]) ** 2 + (pal.b[own] - pal.b[lab]) ** 2);
             if (d < cmin) cmin = d;
           }
-          let keep = false;
+          // «чернильная» деталь: резко отличается от всех соседей и темнее (или светлее) каждого из них —
+          // контур, зрачок, блик. Промежуточные полоски сглаживания под это не попадают.
+          let ink = false;
+          if (P.keepInk && cmin > P.inkC) {
+            let dark = true, light = true;
+            for (const lab of nbLabs) {
+              if (bc[lab] < border * 0.08) continue;
+              const dl = pal.l[lab] - pal.l[own];
+              if (dl < P.inkDL) dark = false;
+              if (dl > -P.inkDL) light = false;
+            }
+            ink = dark || light;
+          }
+          let keep = mode === 'thin' && ink;
           if (mode === 'area') {
             // значимое место и сильный контраст с соседями → деталь, а не шум
             const fc = Math.max(1 / (1 + (cmin / P.contrastRef) ** 2), 0.22);
             const thr = Math.max(P.minAbs, P.minArea * (1 - 0.62 * si) * fc);
-            keep = ar >= thr;
+            keep = ar >= thr || (ink && ar >= P.inkMin);
           }
           if (!keep) {
             let best = Infinity, bl = own;
@@ -413,9 +426,13 @@
     }
 
     // ---------- шум: ложные линии ----------
-    // Плоскость режется на «органические» ячейки (Вороной в искривлённых координатах).
-    // Ячейки общие для всей картинки, поэтому ложные линии проходят сквозь настоящие контуры.
-    function noiseCells(w, h, size, seed) {
+    // Сквозные линии трёх видов, каждая — нулевой уровень гладкой функции на всей картинке:
+    //   • длинные волнистые линии от края до края;
+    //   • замкнутые «силуэты»-обманки (искажённые овалы);
+    //   • изолинии случайного рельефа — похожи на границы настоящих цветовых пятен.
+    // Каждая линия переключает свой бит в номере ячейки, поэтому она непрерывна
+    // и проходит сквозь любые области, а не обрывается на их границах.
+    function noiseCells(w, h, level, seed) {
       let s = seed >>> 0;
       const rnd = () => {
         s = (s + 0x6d2b79f5) | 0;
@@ -423,41 +440,58 @@
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
-      const mk = (cs) => {
+      const n = w * h, long = Math.max(w, h), t = clamp((level - 1) / 9, 0, 1);
+      const field = (cs) => {
         const gw = Math.ceil(w / cs) + 2, gh = Math.ceil(h / cs) + 2, g = new Float32Array(gw * gh);
         for (let i = 0; i < g.length; i++) g[i] = rnd() * 2 - 1;
-        return { cs, gw, g };
-      };
-      const sample = (N, x, y) => {
-        const fx = x / N.cs, fy = y / N.cs, x0 = fx | 0, y0 = fy | 0;
-        let tx = fx - x0, ty = fy - y0;
-        tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
-        const i = y0 * N.gw + x0, a = N.g[i], b = N.g[i + 1], c = N.g[i + N.gw], d = N.g[i + N.gw + 1];
-        return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
-      };
-      const n1 = mk(size * 1.3), n2 = mk(size * 1.3), n3 = mk(size * 0.45), n4 = mk(size * 0.45);
-      const amp = size * 0.6, amp2 = size * 0.15;
-      const gw = Math.ceil(w / size) + 4, gh = Math.ceil(h / size) + 4;
-      const sx = new Float32Array(gw * gh), sy = new Float32Array(gw * gh);
-      for (let gy = 0; gy < gh; gy++)
-        for (let gx = 0; gx < gw; gx++) {
-          sx[gy * gw + gx] = (gx - 2 + 0.12 + 0.76 * rnd()) * size;
-          sy[gy * gw + gx] = (gy - 2 + 0.12 + 0.76 * rnd()) * size;
+        const out = new Float32Array(n);
+        for (let y = 0; y < h; y++) {
+          const fy = y / cs, y0 = fy | 0;
+          let ty = fy - y0; ty = ty * ty * (3 - 2 * ty);
+          for (let x = 0; x < w; x++) {
+            const fx = x / cs, x0 = fx | 0;
+            let tx = fx - x0; tx = tx * tx * (3 - 2 * tx);
+            const i = y0 * gw + x0, a = g[i], b = g[i + 1], c = g[i + gw], d = g[i + gw + 1];
+            out[y * w + x] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+          }
         }
-      const cell = new Int32Array(w * h);
-      for (let y = 0; y < h; y++)
-        for (let x = 0; x < w; x++) {
-          const px = x + amp * sample(n1, x, y) + amp2 * sample(n3, x, y);
-          const py = y + amp * sample(n2, x, y) + amp2 * sample(n4, x, y);
-          const cx = Math.floor(px / size) + 2, cy = Math.floor(py / size) + 2;
-          let best = Infinity, bi = 0;
-          for (let gy = Math.max(0, cy - 1); gy <= Math.min(gh - 1, cy + 1); gy++)
-            for (let gx = Math.max(0, cx - 1); gx <= Math.min(gw - 1, cx + 1); gx++) {
-              const k = gy * gw + gx, d = (sx[k] - px) ** 2 + (sy[k] - py) ** 2;
-              if (d < best) { best = d; bi = k; }
-            }
-          cell[y * w + x] = bi;
-        }
+        return out;
+      };
+      const B0 = field(long * 0.3), B1 = field(long * 0.3), B2 = field(long * 0.21);
+      const S0 = field(long * 0.07), S1 = field(long * 0.07);
+      const mix = (k) => {
+        const v = [];
+        let l = 0;
+        for (let i = 0; i < k; i++) { v.push(rnd() * 2 - 1); l += v[i] * v[i]; }
+        l = Math.sqrt(l) || 1;
+        return v.map((x) => x / l);
+      };
+      const cell = new Int32Array(n);
+      const usedBits = new Set();
+      const cut = (fn) => {
+        let b;
+        do { b = 1 + ((rnd() * 0x3ffffe) | 0); } while (usedBits.has(b));
+        usedBits.add(b);
+        for (let y = 0, i = 0; y < h; y++) for (let x = 0; x < w; x++, i++) if (fn(x, y, i) > 0) cell[i] ^= b;
+      };
+      const nLines = Math.round(lerp(3, 13, t)), nBlobs = Math.round(lerp(2, 11, t)), nFields = Math.round(lerp(1, 3, t));
+      for (let k = 0; k < nLines; k++) {
+        const th = rnd() * Math.PI, cs = Math.cos(th), sn = Math.sin(th);
+        const cx = (0.1 + 0.8 * rnd()) * w, cy = (0.1 + 0.8 * rnd()) * h;
+        const [a, b, c] = mix(3), [d, e] = mix(2), amp = long * (0.05 + 0.07 * rnd()), amp2 = long * 0.012;
+        cut((x, y, i) => (x - cx) * cs + (y - cy) * sn + amp * (a * B0[i] + b * B1[i] + c * B2[i]) + amp2 * (d * S0[i] + e * S1[i]));
+      }
+      for (let k = 0; k < nBlobs; k++) {
+        const cx = rnd() * w, cy = rnd() * h, r = long * (0.06 + 0.17 * rnd()), ex = 0.7 + 0.6 * rnd();
+        const [a, b, c] = mix(3), [d, e] = mix(2);
+        cut((x, y, i) => Math.hypot((x - cx) * ex, (y - cy) / ex) - r * (1 + 0.5 * (a * B0[i] + b * B1[i] + c * B2[i]) + 0.09 * (d * S0[i] + e * S1[i])));
+      }
+      for (let k = 0; k < nFields; k++) {
+        const [a, b, c] = mix(3), [d, e] = mix(2);
+        const levels = rnd() < 0.5 ? [-0.18, 0.18] : [-0.3, 0, 0.3];
+        for (const lv of levels)
+          cut((x, y, i) => a * B0[i] + b * B1[i] + c * B2[i] + 0.06 * (d * S0[i] + e * S1[i]) - lv);
+      }
       return cell;
     }
     // слишком мелкие и тонкие обрезки возвращаются к соседнему куску того же цвета
@@ -549,7 +583,7 @@
       return s;
     };
 
-    function vectorize(rid, w, h, regLabel, K, smoothIters, eps, tick) {
+    function vectorize(rid, w, h, regLabel, K, smoothIters, eps, tick, regInk) {
       const W1 = w + 1, H1 = h + 1;
       const hc = new Uint8Array(w * H1), vc = new Uint8Array(W1 * h);
       let total = 0;
@@ -688,13 +722,13 @@
 
       // контуры областей: обход с областью слева
       const visF = new Uint8Array(nc), visR = new Uint8Array(nc);
-      const fillParts = [];
+      const fillParts = [], inkParts = [];
       for (let k = 0; k < K; k++) fillParts.push([]);
       for (let c = 0; c < nc; c++)
         for (let rev = 0; rev < 2; rev++) {
           const reg = rev ? cRight[c] : cLeft[c];
           if (reg < 0 || (rev ? visR : visF)[c]) continue;
-          const parts = fillParts[regLabel[reg]];
+          const parts = [];
           parts.push('M' + (rev ? ePt[c] : sPt[c]));
           let cc = c, rr = rev, guard = 0;
           do {
@@ -712,11 +746,14 @@
             rr = crackFwd(x, y, nd) ? 0 : 1;
           } while (!(cc === c && rr === rev) && ++guard < 5e6 && cc >= 0);
           parts.push('Z');
+          const ring = parts.join('');
+          fillParts[regLabel[reg]].push(ring);
+          if (regInk && regInk[reg]) inkParts.push(ring);
         }
       const lineParts = [];
       for (let c = 0; c < nc; c++) lineParts.push('M' + sPt[c] + fwdStr[c] + (isClosed[c] ? 'Z' : ''));
       tick(1);
-      return { fills: fillParts.map((p) => p.join('')), lines: lineParts.join(''), chains: nc };
+      return { fills: fillParts.map((p) => p.join('')), lines: lineParts.join(''), ink: inkParts.join(''), chains: nc };
     }
 
     // ---------- сборка ----------
@@ -748,7 +785,10 @@
 
       progress('Слияние мелких областей', 0.67);
       const minArea = n * Math.exp(lerp(Math.log(1 / 1400), Math.log(1 / 13000), t));
-      const MP = { minArea, minAbs: Math.max(5, minArea * 0.07), contrastRef: 0.13, minThick: lerp(3.0, 1.8, t) * Math.max(S, 0.6) };
+      // чувствительность контуров 1..10 → cu 0..1 (−1 — режим выключен): чем выше, тем слабее контраст и мельче деталь,
+      // которые ещё считаются контуром
+      const cu = opts.contours > 0 ? clamp((opts.contours - 1) / 9, 0, 1) : -1;
+      const MP = { minArea, minAbs: Math.max(5, minArea * 0.07), contrastRef: 0.13, minThick: lerp(3.0, 1.8, t) * Math.max(S, 0.6), keepInk: cu >= 0, inkC: lerp(0.3, 0.09, cu), inkDL: lerp(0.14, 0.05, cu), inkMin: Math.max(3, lerp(8, 3, cu) * S * S) };
       mergeRegions(labels, L, A, B, imp, w, h, pal, MP, 'area');
       for (let k = 0; k < 2; k++) {
         if (!mergeRegions(labels, L, A, B, imp, w, h, pal, MP, 'thin')) break;
@@ -776,16 +816,78 @@
       const noise = clamp(+opts.noise || 0, 0, 10);
       if (noise > 0) {
         progress('Ложные линии', 0.79);
-        const size = Math.max(w, h) * lerp(0.17, 0.04, (noise - 1) / 9);
-        const cell = noiseCells(w, h, size, 0x9e3779b9);
+        const cell = noiseCells(w, h, noise, 0x9e3779b9);
         key = new Int32Array(n);
         for (let i = 0; i < n; i++) key[i] = cell[i] * 256 + labels[i];
-        mergePieces(key, w, h, Math.max(MP.minArea * 1.3, size * size * 0.12), Math.max(MP.minThick * 1.6, size * 0.11));
+        // порог обрезков ниже обычного: чем реже линия рвётся, тем хуже читается сюжет
+        mergePieces(key, w, h, MP.minArea * 0.7, MP.minThick);
+      }
+
+      // Контуры: в тёмных областях отделяем тонкие части (штрихи, обводку, точки) от толстых.
+      // Тонкая часть — то, что исчезает при морфологическом «открытии» радиусом inkR: пиксель ближе inkR
+      // к границе своего цвета и дальше inkR от «ядра» (точек, где радиус ≥ inkR). Толстые части той же
+      // области остаются обычными областями с номером.
+      const INK = 0x40000000;
+      const palL = used.map((k) => sl[k] / cnt[k]);
+      if (cu >= 0) {
+        progress('Контуры', 0.795);
+        const inkR = Math.max(2.5, Math.max(w, h) * lerp(0.003, 0.006, cu)), inkL = lerp(0.3, 0.48, cu);
+        const dl = distanceMap(labels, w, h);
+        const dc = new Float32Array(n);
+        let any = false;
+        for (let i = 0; i < n; i++) {
+          const dark = palL[labels[i]] < inkL;
+          if (dark) any = true;
+          dc[i] = dark && dl[i] >= inkR ? 0 : 1e9;
+        }
+        if (any) {
+          for (let y = 0; y < h; y++)
+            for (let x = 0; x < w; x++) {
+              const i = y * w + x;
+              let v = dc[i];
+              if (x > 0 && dc[i - 1] + 1 < v) v = dc[i - 1] + 1;
+              if (y > 0) {
+                if (dc[i - w] + 1 < v) v = dc[i - w] + 1;
+                if (x > 0 && dc[i - w - 1] + 1.4142 < v) v = dc[i - w - 1] + 1.4142;
+                if (x < w - 1 && dc[i - w + 1] + 1.4142 < v) v = dc[i - w + 1] + 1.4142;
+              }
+              dc[i] = v;
+            }
+          for (let y = h - 1; y >= 0; y--)
+            for (let x = w - 1; x >= 0; x--) {
+              const i = y * w + x;
+              let v = dc[i];
+              if (x < w - 1 && dc[i + 1] + 1 < v) v = dc[i + 1] + 1;
+              if (y < h - 1) {
+                if (dc[i + w] + 1 < v) v = dc[i + w] + 1;
+                if (x < w - 1 && dc[i + w + 1] + 1.4142 < v) v = dc[i + w + 1] + 1.4142;
+                if (x > 0 && dc[i + w - 1] + 1.4142 < v) v = dc[i + w - 1] + 1.4142;
+              }
+              dc[i] = v;
+            }
+          if (key === labels) key = Int32Array.from(labels);
+          for (let i = 0; i < n; i++)
+            if (palL[labels[i]] < inkL && dl[i] < inkR && dc[i] > inkR + 1.5) key[i] |= INK;
+          // мелкие «уголки», срезанные у толстых областей, возвращаем обратно
+          const c0 = components(key, w, h), touch = new Uint8Array(c0.count);
+          for (let y = 0; y < h; y++)
+            for (let x = 0; x < w; x++) {
+              const i = y * w + x;
+              for (const j of [x < w - 1 ? i + 1 : -1, y < h - 1 ? i + w : -1]) {
+                if (j < 0 || c0.rid[i] === c0.rid[j] || labels[i] !== labels[j]) continue;
+                if ((key[i] & INK) !== (key[j] & INK)) { touch[c0.rid[i]] = 1; touch[c0.rid[j]] = 1; }
+              }
+            }
+          const small = 3 * inkR * inkR;
+          for (let i = 0; i < n; i++)
+            if (key[i] & INK && touch[c0.rid[i]] && c0.area[c0.rid[i]] < small) key[i] &= ~INK;
+        }
       }
 
       progress('Расстановка номеров', 0.8);
       const cc = components(key, w, h);
-      for (let r = 0; r < cc.count; r++) cc.regLabel[r] &= 255;
+      const inkFlag = new Uint8Array(cc.count);
+      for (let r = 0; r < cc.count; r++) { inkFlag[r] = cc.regLabel[r] & INK ? 1 : 0; cc.regLabel[r] &= 255; }
       const dm = distanceMap(cc.rid, w, h);
       const bestD = new Float32Array(cc.count), bestI = new Int32Array(cc.count);
       for (let i = 0; i < n; i++) { const r = cc.rid[i]; if (dm[i] > bestD[r]) { bestD[r] = dm[i]; bestI[r] = i; } }
@@ -794,6 +896,29 @@
       // или между ними узкий перешеек / граница (отдельная «доля» той же области).
       const long = Math.max(w, h);
       const minR = long * 0.0065, sFar = long * 0.2, sNear = long * 0.045, maxPer = 14;
+      // тонкая тёмная часть печатается готовой заливкой, если она темнее почти всего, с чем граничит
+      let regInk = null;
+      if (cu >= 0) {
+        const bord = new Float32Array(cc.count), bad = new Float32Array(cc.count);
+        const edge = (i, j) => {
+          const r = cc.rid[i], q = cc.rid[j];
+          if (r === q) return;
+          const la = cc.regLabel[r], lb = cc.regLabel[q];
+          if (la === lb) return;
+          bord[r]++; bord[q]++;
+          if (palL[lb] < palL[la] + MP.inkDL) bad[r]++;
+          if (palL[la] < palL[lb] + MP.inkDL) bad[q]++;
+        };
+        for (let y = 0; y < h; y++)
+          for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (x < w - 1) edge(i, i + 1);
+            if (y < h - 1) edge(i, i + w);
+          }
+        regInk = new Uint8Array(cc.count);
+        for (let r = 0; r < cc.count; r++)
+          if (inkFlag[r] && bord[r] > 0 && bad[r] <= 0.3 * bord[r]) regInk[r] = 1;
+      }
       const placed = new Array(cc.count);
       for (let r = 0; r < cc.count; r++) placed[r] = [bestI[r]];
       const candI = [];
@@ -828,13 +953,15 @@
         if (ok) list.push(c);
       }
       const numList = [];
-      for (let r = 0; r < cc.count; r++)
+      for (let r = 0; r < cc.count; r++) {
+        if (regInk && regInk[r]) continue;
         for (const i of placed[r]) numList.push((i % w) + 0.5, ((i / w) | 0) + 0.5, dm[i], cc.regLabel[r]);
+      }
       const nums = new Float32Array(numList);
 
-      const vec = vectorize(cc.rid, w, h, cc.regLabel, K, 10, 0.2, stage('Векторизация контуров', 0.82, 0.99));
+      const vec = vectorize(cc.rid, w, h, cc.regLabel, K, 10, 0.2, stage('Векторизация контуров', 0.82, 0.99), regInk);
       progress('Готово', 1);
-      return { w, h, palette, fills: vec.fills, lines: vec.lines, nums, regions: cc.count, ms: Date.now() - t0 };
+      return { w, h, palette, fills: vec.fills, lines: vec.lines, ink: vec.ink, nums, regions: cc.count, ms: Date.now() - t0 };
     }
 
     return { process };

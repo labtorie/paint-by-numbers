@@ -15,6 +15,7 @@
 
   function setProgress(text, p) {
     $('progress').classList.toggle('on', text !== null);
+    document.body.classList.toggle('busy', text !== null);
     if (text !== null) { $('progText').textContent = text; $('progBar').style.width = Math.round(p * 100) + '%'; }
   }
 
@@ -123,9 +124,9 @@
 
   function run() {
     if (!state.img) return;
-    const detail = +$('detail').value, colors = +$('colors').value, noise = +$('noise').value;
+    const detail = +$('detail').value, colors = +$('colors').value, noise = +$('noise').value, contours = +$('contours').value;
     const crop = cropRect();
-    const long = Math.round(Math.min(720 + (detail - 1) / 9 * 680, Math.max(crop.w, crop.h, 320) * 1.5));
+    const long = Math.round(Math.min((720 + (detail - 1) / 9 * 680) * (contours ? 1.25 : 1), Math.max(crop.w, crop.h, 320) * 1.5));
     const sc = long / Math.max(crop.w, crop.h);
     const w = Math.max(8, Math.round(crop.w * sc)), h = Math.max(8, Math.round(crop.h * sc));
     const data = rasterize(state.img, crop, w, h);
@@ -145,7 +146,7 @@
       }
       else { setProgress(null); console.error(m.message); alert('Ошибка обработки: ' + m.message.split('\n')[0]); }
     };
-    worker.postMessage({ id, rgba: data.data, w, h, opts: { colors, detail, noise } }, [data.data.buffer]);
+    worker.postMessage({ id, rgba: data.data, w, h, opts: { colors, detail, noise, contours } }, [data.data.buffer]);
   }
 
   // ---------- SVG ----------
@@ -181,6 +182,7 @@
       s += '</g>';
     }
     if (!forExport || mode !== 'color') {
+      if (res.ink) s += '<path class="ink" fill-rule="evenodd" fill="' + lineColor() + '" d="' + res.ink + '"/>';
       s += '<path class="lines" fill="none" stroke="' + lineColor() + '" stroke-width="' + lw.toFixed(2) + '" stroke-linejoin="round" stroke-linecap="round" d="' + res.lines + '"/>';
       if (!forExport || $('showNums').checked)
         s += '<g class="nums" font-family="Helvetica, Arial, sans-serif" fill="' + numColor() + '" text-anchor="middle">' + numsMarkup(res) + '</g>';
@@ -221,8 +223,8 @@
   }
 
   // ---------- управление ----------
-  const showVal = (id) => { $(id + 'Out').textContent = id === 'noise' && $(id).value === '0' ? 'выкл' : $(id).value; };
-  for (const id of ['colors', 'detail', 'noise']) {
+  const showVal = (id) => { $(id + 'Out').textContent = (id === 'noise' || id === 'contours') && $(id).value === '0' ? 'выкл' : $(id).value; };
+  for (const id of ['colors', 'detail', 'noise', 'contours']) {
     $(id).oninput = () => { showVal(id); clearTimeout(state.timer); state.timer = setTimeout(run, 350); };
   }
   $('lineW').oninput = () => {
@@ -238,6 +240,8 @@
     const svg = stage.firstElementChild;
     if (!svg || !state.result) return;
     svg.querySelector('.lines').setAttribute('stroke', lineColor());
+    const ink = svg.querySelector('.ink');
+    if (ink) ink.setAttribute('fill', lineColor());
     svg.querySelector('.nums').setAttribute('fill', numColor());
   };
   $('mode').onclick = (e) => { if (e.target.dataset.m) { state.mode = e.target.dataset.m; applyMode(); } };
@@ -331,7 +335,7 @@
 
   // для отладки: ?src=путь&colors=..&detail=..
   const q = new URLSearchParams(location.search);
-  for (const id of ['colors', 'detail', 'noise', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); showVal(id); }
+  for (const id of ['colors', 'detail', 'noise', 'contours', 'lineW']) if (q.get(id)) { $(id).value = q.get(id); showVal(id); }
   if (q.get('lineC')) { $('lineC').value = q.get('lineC'); $('lineCOut').textContent = $('lineC').value + '%'; }
   for (const id of ['paper', 'orient']) if (q.get(id)) $(id).value = q.get(id);
   for (const id of ['crop', 'legend']) if (q.get(id)) $(id).checked = q.get(id) === '1';
