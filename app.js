@@ -154,7 +154,7 @@
   const gray = (v) => { const h = Math.round(v).toString(16).padStart(2, '0'); return '#' + h + h + h; };
   const lineLevel = () => 255 - (+$('lineC').value / 100) * 225;
   const lineColor = () => gray(lineLevel());
-  const numColor = () => gray(Math.min(lineLevel() + (255 - lineLevel()) * 0.4, 246));
+  const numColor = () => gray(Math.min(lineLevel() + (255 - lineLevel()) * 0.2, 248));
   const textOn = (rgb) => (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 140 ? '#000' : '#fff');
 
   function numsMarkup(res) {

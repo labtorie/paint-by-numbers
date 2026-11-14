@@ -789,13 +789,48 @@
       const dm = distanceMap(cc.rid, w, h);
       const bestD = new Float32Array(cc.count), bestI = new Int32Array(cc.count);
       for (let i = 0; i < n; i++) { const r = cc.rid[i]; if (dm[i] > bestD[r]) { bestD[r] = dm[i]; bestI[r] = i; } }
-      const nums = new Float32Array(cc.count * 4);
-      for (let r = 0; r < cc.count; r++) {
-        nums[4 * r] = (bestI[r] % w) + 0.5;
-        nums[4 * r + 1] = ((bestI[r] / w) | 0) + 0.5;
-        nums[4 * r + 2] = bestD[r];
-        nums[4 * r + 3] = cc.regLabel[r];
+      // Номера. Первый — в самой «просторной» точке области. Дополнительные — в других
+      // локальных максимумах карты расстояний, если до уже поставленных номеров далеко
+      // или между ними узкий перешеек / граница (отдельная «доля» той же области).
+      const long = Math.max(w, h);
+      const minR = long * 0.0065, sFar = long * 0.2, sNear = long * 0.045, maxPer = 14;
+      const placed = new Array(cc.count);
+      for (let r = 0; r < cc.count; r++) placed[r] = [bestI[r]];
+      const candI = [];
+      for (let y = 1; y < h - 1; y++)
+        for (let x = 1; x < w - 1; x++) {
+          const i = y * w + x, d = dm[i];
+          if (d < minR) continue;
+          if (d < dm[i - 1] || d < dm[i + 1] || d < dm[i - w] || d < dm[i + w] ||
+              d < dm[i - w - 1] || d < dm[i - w + 1] || d < dm[i + w - 1] || d < dm[i + w + 1]) continue;
+          candI.push(i);
+        }
+      candI.sort((p, q) => dm[q] - dm[p]);
+      for (const c of candI) {
+        const r = cc.rid[c], list = placed[r];
+        if (list.length >= maxPer) continue;
+        const cx = c % w, cy = (c / w) | 0, rc = dm[c];
+        let ok = true;
+        for (let k = 0; k < list.length && ok; k++) {
+          const a = list[k], ax = a % w, ay = (a / w) | 0;
+          const dist = Math.hypot(cx - ax, cy - ay);
+          if (dist < sNear) { ok = false; break; }
+          if (dist >= sFar) continue;
+          // между «близко» и «далеко»: смотрим, есть ли перешеек на прямой между точками
+          const steps = Math.ceil(dist), lim = 0.45 * Math.min(rc, dm[a]);
+          let split = false;
+          for (let t = 1; t < steps; t++) {
+            const j = Math.round(cy + ((ay - cy) * t) / steps) * w + Math.round(cx + ((ax - cx) * t) / steps);
+            if (cc.rid[j] !== r || dm[j] < lim) { split = true; break; }
+          }
+          if (!split) ok = false;
+        }
+        if (ok) list.push(c);
       }
+      const numList = [];
+      for (let r = 0; r < cc.count; r++)
+        for (const i of placed[r]) numList.push((i % w) + 0.5, ((i / w) | 0) + 0.5, dm[i], cc.regLabel[r]);
+      const nums = new Float32Array(numList);
 
       const vec = vectorize(cc.rid, w, h, cc.regLabel, K, 10, 0.2, stage('Векторизация контуров', 0.82, 0.99));
       progress('Готово', 1);
